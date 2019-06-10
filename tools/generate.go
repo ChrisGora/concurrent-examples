@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/sha1"
 	"fmt"
-	"github.com/russross/blackfriday"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -12,11 +11,17 @@ import (
 	"regexp"
 	"strings"
 	"text/template"
+
+	"github.com/russross/blackfriday"
 )
 
 var cacheDir = "/tmp/gobyexample-cache"
 var siteDir = "./public"
 var pygmentizeBin = "./vendor/pygments/pygmentize"
+
+func verbose() bool {
+	return len(os.Getenv("VERBOSE")) > 0
+}
 
 func check(err error) {
 	if err != nil {
@@ -138,6 +143,9 @@ func parseHashFile(sourcePath string) (string, string) {
 }
 
 func resetURLHashFile(codehash, code, sourcePath string) string {
+	if verbose() {
+		fmt.Println("  Sending request to play.golang.org")
+	}
 	payload := strings.NewReader(code)
 	resp, err := http.Post("https://play.golang.org/share", "text/plain", payload)
 	if err != nil {
@@ -152,7 +160,11 @@ func resetURLHashFile(codehash, code, sourcePath string) string {
 }
 
 func parseSegs(sourcePath string) ([]*Seg, string) {
-	lines := readLines(sourcePath)
+	var lines []string
+	// Convert tabs to spaces for uniform rendering.
+	for _, line := range readLines(sourcePath) {
+		lines = append(lines, strings.Replace(line, "\t", "    ", -1))
+	}
 	filecontent := strings.Join(lines, "\n")
 	segs := []*Seg{}
 	lastSeen := ""
@@ -216,36 +228,42 @@ func parseAndRenderSegs(sourcePath string) ([]*Seg, string) {
 }
 
 func parseExamples() []*Example {
-	exampleNames := readLines("examples.txt")
-	examples := make([]*Example, 0)
-	for _, exampleName := range exampleNames {
-		if (exampleName != "") && !strings.HasPrefix(exampleName, "#") {
-			example := Example{Name: exampleName}
-			exampleID := strings.ToLower(exampleName)
-			exampleID = strings.Replace(exampleID, " ", "-", -1)
-			exampleID = strings.Replace(exampleID, "/", "-", -1)
-			exampleID = strings.Replace(exampleID, "'", "", -1)
-			exampleID = dashPat.ReplaceAllString(exampleID, "-")
-			example.ID = exampleID
-			example.Segs = make([][]*Seg, 0)
-			sourcePaths := mustGlob("examples/" + exampleID + "/*")
-			for _, sourcePath := range sourcePaths {
-				if strings.HasSuffix(sourcePath, ".hash") {
-					example.GoCodeHash, example.URLHash = parseHashFile(sourcePath)
-				} else {
-					sourceSegs, filecontents := parseAndRenderSegs(sourcePath)
-					if filecontents != "" {
-						example.GoCode = filecontents
-					}
-					example.Segs = append(example.Segs, sourceSegs)
-				}
-			}
-			newCodeHash := sha1Sum(example.GoCode)
-			if example.GoCodeHash != newCodeHash {
-				example.URLHash = resetURLHashFile(newCodeHash, example.GoCode, "examples/"+example.ID+"/"+example.ID+".hash")
-			}
-			examples = append(examples, &example)
+	var exampleNames []string
+	for _, line := range readLines("examples.txt") {
+		if line != "" && !strings.HasPrefix(line, "#") {
+			exampleNames = append(exampleNames, line)
 		}
+	}
+	examples := make([]*Example, 0)
+	for i, exampleName := range exampleNames {
+		if verbose() {
+			fmt.Printf("Processing %s [%d/%d]\n", exampleName, i+1, len(exampleNames))
+		}
+		example := Example{Name: exampleName}
+		exampleID := strings.ToLower(exampleName)
+		exampleID = strings.Replace(exampleID, " ", "-", -1)
+		exampleID = strings.Replace(exampleID, "/", "-", -1)
+		exampleID = strings.Replace(exampleID, "'", "", -1)
+		exampleID = dashPat.ReplaceAllString(exampleID, "-")
+		example.ID = exampleID
+		example.Segs = make([][]*Seg, 0)
+		sourcePaths := mustGlob("examples/" + exampleID + "/*")
+		for _, sourcePath := range sourcePaths {
+			if strings.HasSuffix(sourcePath, ".hash") {
+				example.GoCodeHash, example.URLHash = parseHashFile(sourcePath)
+			} else {
+				sourceSegs, filecontents := parseAndRenderSegs(sourcePath)
+				if filecontents != "" {
+					example.GoCode = filecontents
+				}
+				example.Segs = append(example.Segs, sourceSegs)
+			}
+		}
+		newCodeHash := sha1Sum(example.GoCode)
+		if example.GoCodeHash != newCodeHash {
+			example.URLHash = resetURLHashFile(newCodeHash, example.GoCode, "examples/"+example.ID+"/"+example.ID+".hash")
+		}
+		examples = append(examples, &example)
 	}
 	for i, example := range examples {
 		if i < (len(examples) - 1) {
@@ -256,6 +274,9 @@ func parseExamples() []*Example {
 }
 
 func renderIndex(examples []*Example) {
+	if verbose() {
+		fmt.Println("Rendering index")
+	}
 	indexTmpl := template.New("index")
 	_, err := indexTmpl.Parse(mustReadFile("templates/index.tmpl"))
 	check(err)
@@ -266,6 +287,9 @@ func renderIndex(examples []*Example) {
 }
 
 func renderExamples(examples []*Example) {
+	if verbose() {
+		fmt.Println("Rendering examples")
+	}
 	exampleTmpl := template.New("example")
 	_, err := exampleTmpl.Parse(mustReadFile("templates/example.tmpl"))
 	check(err)
